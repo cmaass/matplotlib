@@ -11,7 +11,6 @@ import matplotlib.colors as mcolors
 import matplotlib.collections as mcollections
 import matplotlib.lines as mlines
 
-
 __all__ = ['streamplot']
 
 
@@ -19,7 +18,7 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
                cmap=None, norm=None, arrowsize=1, arrowstyle='-|>',
                minlength=0.1, transform=None, zorder=None, start_points=None,
                maxlength=4.0, integration_direction='both',
-               broken_streamlines=True):
+               broken_streamlines=True, subdivision=1, alpha=1, line_kw={}):
     """
     Draw streamlines of a vector flow.
 
@@ -46,10 +45,13 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         The streamline color. If given an array, its values are converted to
         colors using *cmap* and *norm*.  The array must have the same shape
         as *u* and *v*.
+    alpha : float or 2D array.
     cmap, norm
         Data normalization and colormapping parameters for *color*; only used
         if *color* is an array of floats. See `~.Axes.imshow` for a detailed
         description.
+    subdivision : float or int
+        parameter to increase resolution of width and colormap quantisation.
     arrowsize : float
         Scaling factor for the arrow size.
     arrowstyle : str
@@ -73,6 +75,7 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         If False, forces streamlines to continue until they
         leave the plot domain.  If True, they may be terminated if they
         come too close to another streamline.
+    line_kw : additional parameters to be passed to the line collection.
 
     Returns
     -------
@@ -105,7 +108,8 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
     if linewidth is None:
         linewidth = mpl.rcParams['lines.linewidth']
 
-    line_kw = {}
+    # line_kw = {}
+    # there are not a lot of other parameters to change here
     arrow_kw = dict(arrowstyle=arrowstyle, mutation_scale=10 * arrowsize)
 
     _api.check_in_list(['both', 'forward', 'backward'],
@@ -115,6 +119,9 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         maxlength /= 2.
 
     use_multicolor_lines = isinstance(color, np.ndarray)
+    use_variable_alpha = isinstance(alpha, np.ndarray)
+    use_variable_linewidth = isinstance(linewidth, np.ndarray)
+
     if use_multicolor_lines:
         if color.shape != grid.shape:
             raise ValueError("If 'color' is given, it must match the shape of "
@@ -125,7 +132,16 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         line_kw['color'] = color
         arrow_kw['color'] = color
 
-    if isinstance(linewidth, np.ndarray):
+    if use_variable_alpha:
+        if alpha.shape != grid.shape:
+            raise ValueError("If 'alpha' is given, it must match the shape of "
+                             "the (x, y) grid")
+        line_kw['alpha'] = []
+    else:
+        line_kw['alpha'] = alpha
+        arrow_kw['alpha'] = alpha
+
+    if use_variable_linewidth:
         if linewidth.shape != grid.shape:
             raise ValueError("If 'linewidth' is given, it must match the "
                              "shape of the (x, y) grid")
@@ -193,13 +209,21 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
     arrows = []
     for t in trajectories:
         tgx, tgy = t.T
+
+        # https://stackoverflow.com/questions/39294987/matplotlib-how-to-increase-colormap-linewidth-quality-in-streamplot
+        if subdivision > 1:
+            xold = np.linspace(0, 1, len(tgx))
+            xnew = np.linspace(0, 1, int(len(tgx)*subdivision))
+            tgx = np.interp(xnew, xold, tgx)
+            tgy = np.interp(xnew, xold, tgy)
+
         # Rescale from grid-coordinates to data-coordinates.
         tx, ty = dmap.grid2data(tgx, tgy)
         tx += grid.x_origin
         ty += grid.y_origin
 
-        # Create multiple tiny segments if varying width or color is given
-        if isinstance(linewidth, np.ndarray) or use_multicolor_lines:
+        # Create multiple tiny segments if varying width or color or alpha is given
+        if use_variable_linewidth or use_multicolor_lines or use_variable_alpha:
             points = np.transpose([tx, ty]).reshape(-1, 1, 2)
             streamlines.extend(np.hstack([points[:-1], points[1:]]))
         else:
@@ -212,7 +236,7 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         arrow_tail = (tx[n], ty[n])
         arrow_head = (np.mean(tx[n:n + 2]), np.mean(ty[n:n + 2]))
 
-        if isinstance(linewidth, np.ndarray):
+        if use_variable_linewidth:
             line_widths = interpgrid(linewidth, tgx, tgy)[:-1]
             line_kw['linewidth'].extend(line_widths)
             arrow_kw['linewidth'] = line_widths[n]
@@ -221,6 +245,11 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
             color_values = interpgrid(color, tgx, tgy)[:-1]
             line_colors.append(color_values)
             arrow_kw['color'] = cmap(norm(color_values[n]))
+
+        if use_variable_alpha:
+            alpha_values = interpgrid(alpha, tgx, tgy)[:-1]
+            line_kw['alpha'].extend(alpha_values)
+            arrow_kw['alpha'] = alpha_values[n]
 
         p = patches.FancyArrowPatch(
             arrow_tail, arrow_head, transform=transform, **arrow_kw)
